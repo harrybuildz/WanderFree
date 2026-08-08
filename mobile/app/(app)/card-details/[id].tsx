@@ -4,7 +4,14 @@
 // card on the Cards tab or a row on Home.
 
 import { router, useLocalSearchParams } from "expo-router";
-import { ArrowLeft, Pencil, Plus, Trash2 } from "lucide-react-native";
+import {
+  ArrowLeft,
+  Circle,
+  CircleCheck,
+  Pencil,
+  Plus,
+  Trash2,
+} from "lucide-react-native";
 import { useState } from "react";
 import {
   ActivityIndicator,
@@ -425,6 +432,28 @@ export default function CardDetailsScreen() {
     );
   }
 
+  // One-tap toggle straight from the bonus section (no edit modal). Flips
+  // is_completed on the stored row; the DB trigger credits/reverses the bonus
+  // value in the program wallet using its ledger, so no field values are needed.
+  function toggleBonusDone(completed: boolean) {
+    if (!card || !bonus) return;
+    updateBonus.mutate(
+      {
+        bonusId: bonus.id,
+        userCardId: c.id,
+        patch: { is_completed: completed },
+      },
+      {
+        onSuccess: () =>
+          snackbar.success(
+            completed ? "Bonus marked as earned" : "Bonus reopened",
+          ),
+        onError: (e: Error) =>
+          snackbar.error(e.message || "Couldn't update bonus"),
+      },
+    );
+  }
+
   function startAddSpend() {
     setSpendAmount("");
     setSpendDate(todayIso);
@@ -641,6 +670,32 @@ export default function CardDetailsScreen() {
                   ? ` · spend by ${fmtDate(bonus.spend_deadline)}`
                   : ""}
               </Text>
+              <Pressable
+                onPress={() => toggleBonusDone(!bonus.is_completed)}
+                disabled={updateBonus.isPending}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: bonus.is_completed }}
+                accessibilityLabel="Mark signup bonus as earned"
+                className="flex-row items-center justify-center gap-2 mt-3 py-2.5 rounded-xl border border-border active:bg-surface-muted"
+              >
+                {bonus.is_completed ? (
+                  <CircleCheck size={16} color={colors.successText} />
+                ) : (
+                  <Circle size={16} color={colors.textMuted} />
+                )}
+                <Text
+                  variant="callout"
+                  className={
+                    bonus.is_completed
+                      ? "text-success-text"
+                      : "text-primary-strong"
+                  }
+                >
+                  {bonus.is_completed
+                    ? "Earned — tap to undo"
+                    : "Mark as earned"}
+                </Text>
+              </Pressable>
             </View>
           ) : (
             <View className="px-4 py-5 items-center">
