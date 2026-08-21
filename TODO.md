@@ -1,5 +1,17 @@
 # TODO
 
+> ## ⚠️ THIS FILE IS STALE — DO NOT TRUST IT
+>
+> Written during the initial bootstrap. It describes a `pipeline/` directory, a
+> `user_visible_benefits` view, and `network_tiers` / `benefit_signature` /
+> `extraction_confidence` columns. **None of these exist.** The extraction
+> pipeline was deliberately removed; the catalog is curated by hand (now via the
+> `admin-api` + `admin-web` console).
+>
+> Kept for historical record only. A rewrite is assigned to a coworker — see the
+> note in `CLAUDE.md`. Until then, the truth lives in `CLAUDE.md`, the
+> sub-project READMEs, and `supabase/migrations/`.
+
 Open work for contributors picking up the project after the initial bootstrap.
 See `CLAUDE.md` for repository shape/architecture and the root `README.md` for
 locked product decisions.

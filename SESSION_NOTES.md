@@ -1,5 +1,17 @@
 # Session Notes — WanderFree Bootstrap
 
+> ## ⚠️ THIS FILE IS STALE — DO NOT TRUST IT
+>
+> Written during the initial bootstrap. It describes a `pipeline/` directory, a
+> `user_visible_benefits` view, and `network_tiers` / `benefit_signature` /
+> `extraction_confidence` columns. **None of these exist.** The extraction
+> pipeline was deliberately removed; the catalog is curated by hand (now via the
+> `admin-api` + `admin-web` console).
+>
+> Kept for historical record only. A rewrite is assigned to a coworker — see the
+> note in `CLAUDE.md`. Until then, the truth lives in `CLAUDE.md`, the
+> sub-project READMEs, and `supabase/migrations/`.
+
 A compact summary of the architectural decisions, work completed, and lessons
 learned during the initial bootstrap session. Forward-looking work lives in
 `TODO.md`; this file is the backward-looking record of why things are the way

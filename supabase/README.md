@@ -110,3 +110,43 @@ Per-table summary:
 | `user_benefit_cycles`, `benefit_redemptions`, `user_signup_bonuses`, `spend_entries` | `can_access_user_card(user_card_id)` | same |
 
 The **service role key** bypasses RLS and must never ship in the mobile app.
+It is held by exactly one thing: [`admin-api`](../admin-api), the internal admin
+console server, which runs on localhost and gates every request behind a
+Supabase Auth session plus an `admin_users` allowlist check.
+
+## Admin console tables
+
+`20260821120000_admin_console.sql` adds two tables that back that console. Both
+have RLS enabled with **no policies** and all privileges revoked from
+`anon`/`authenticated`, so the only access path is the service role or a
+dashboard session — the mobile app can neither read nor write them.
+
+| Table | Purpose |
+|-------|---------|
+| `admin_users` | Allowlist of emails permitted to use the console. `is_active = false` soft-revokes without losing the audit trail's reference. Email is normalized to lowercase by a trigger. |
+| `admin_audit_log` | Append-only record of every console write, with actor (from the verified JWT), full before/after row images, and the cascade impact of a delete. |
+
+Granting admin access is a deliberate SQL action:
+
+```sql
+insert into public.admin_users (email, display_name)
+values ('you@example.com', 'Your Name');
+```
+
+## A cascade worth knowing about
+
+`benefit_definitions.card_product_id` is `ON DELETE CASCADE`, and
+`user_benefit_cycles.benefit_definition_id` and
+`benefit_redemptions.benefit_cycle_id` are too. So deleting a **catalog** row:
+
+```
+card_products
+  └─ benefit_definitions      CASCADE
+       └─ user_benefit_cycles CASCADE
+            └─ benefit_redemptions CASCADE   ← real users' history
+```
+
+`user_cards.card_product_id` is `RESTRICT`, so a product anyone currently holds
+cannot be deleted at all — but one nobody holds will take its whole benefit
+subtree with it, silently. The admin console computes and displays this impact
+before any delete; if you are working in Studio instead, check it yourself.

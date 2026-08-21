@@ -7,13 +7,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 WanderFree is a monorepo with **two sub-projects, each with its own toolchain**. Always `cd` into the relevant one before running commands — there is no top-level package or build.
 
 ```
-supabase/   SQL + CLI    — schema migrations + RLS policies (source of truth)
-mobile/     Expo / RN    — the user-facing app (Node 20)
+supabase/    SQL + CLI     — schema migrations + RLS policies (source of truth)
+mobile/      Expo / RN     — the user-facing app (Node 20)
+admin-api/   Express + TS  — internal admin console server (holds the service-role key)
+admin-web/   Vite + React  — internal admin console UI (talks to admin-api)
+website/     static HTML   — marketing + support site, GitHub Pages (wanderfreely.app)
 ```
 
 Pinned versions: `.nvmrc` → 20.
 
-The catalog (issuers, card products, benefit definitions, reward categories) is **populated manually** in Supabase. There is no extraction pipeline — an earlier Anthropic-driven extractor lived in `pipeline/` and was removed; do not re-introduce it without a clear reason.
+`website/` has no toolchain — open the HTML or serve it with `python3 -m http.server`.
+`admin-api/` + `admin-web/` are a pair: the UI is useless without the API running.
+
+The catalog (issuers, card products, benefit definitions, reward categories) is **populated manually** — historically by hand in the Supabase dashboard, now through the `admin-api` + `admin-web` console. There is no extraction pipeline; an earlier Anthropic-driven extractor lived in `pipeline/` and was removed. Do not re-introduce it without a clear reason.
+
+> **`SESSION_NOTES.md` and `TODO.md` are stale** and describe that removed pipeline, plus a `user_visible_benefits` view, `network_tiers` and `extraction_confidence` columns — none of which exist. Both files carry a warning banner. A rewrite is assigned; until then treat this file, the READMEs and the migrations as the truth.
 
 `README.md` (root) and each sub-project's `README.md` carry the long-form context. Re-read them before touching unfamiliar areas.
 
