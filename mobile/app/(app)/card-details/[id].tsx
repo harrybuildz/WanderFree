@@ -329,7 +329,6 @@ export default function CardDetailsScreen() {
       {
         userCardId: c.id,
         newCardProductId: newProductId,
-        fromCardProductId: product.id,
       },
       {
         onSuccess: () => {

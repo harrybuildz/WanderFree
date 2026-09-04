@@ -876,9 +876,8 @@ export function useChangeCardProduct(portfolioId: string | undefined) {
     mutationFn: async (args: {
       userCardId: string;
       newCardProductId: string;
-      fromCardProductId: string;
     }) => {
-      const { userCardId, newCardProductId, fromCardProductId } = args;
+      const { userCardId, newCardProductId } = args;
 
       // 1. Read opened_on — anniversary benefit cycles are anchored to it.
       const { data: card, error: cardErr } = await supabase
@@ -888,13 +887,13 @@ export function useChangeCardProduct(portfolioId: string | undefined) {
         .single();
       if (cardErr) throw cardErr;
 
-      // 2. Swap the product on the same row, remembering the origin.
+      // 2. Swap the product on the same row. The same-issuer check and the
+      //    product_changed_from_id provenance (recorded once, the original
+      //    product) are enforced by the trg_enforce_card_product_change trigger
+      //    so they hold even if a client bypasses the sibling-product UI.
       const { error: upErr } = await supabase
         .from("user_cards")
-        .update({
-          card_product_id: newCardProductId,
-          product_changed_from_id: fromCardProductId,
-        })
+        .update({ card_product_id: newCardProductId })
         .eq("id", userCardId);
       if (upErr) throw upErr;
 
@@ -907,22 +906,29 @@ export function useChangeCardProduct(portfolioId: string | undefined) {
         .eq("card_product_id", newCardProductId);
       if (dErr) throw dErr;
 
-      // Skip any def that already has a cycle on this card (e.g. changing back
-      // to a product held before) so we never double-insert.
+      // Skip a def only when it already has a cycle covering TODAY — a switch
+      // back to a previously-held product may have old, expired cycles for its
+      // defs, and those must not suppress seeding a fresh current cycle (else
+      // useBenefits finds no cycle for today).
+      const today = new Date();
+      const todayIso = iso(today);
       const { data: existing, error: exErr } = await supabase
         .from("user_benefit_cycles")
-        .select("benefit_definition_id")
+        .select("benefit_definition_id, period_start, period_end")
         .eq("user_card_id", userCardId);
       if (exErr) throw exErr;
-      const seeded = new Set(
-        (existing ?? []).map((c) => c.benefit_definition_id),
+      const hasCurrentCycle = new Set(
+        (existing ?? [])
+          .filter(
+            (c) => c.period_start <= todayIso && c.period_end >= todayIso,
+          )
+          .map((c) => c.benefit_definition_id),
       );
 
-      const today = new Date();
       const openedOnDate = card?.opened_on ? new Date(card.opened_on) : null;
       const cycles: Array<Record<string, unknown>> = [];
       for (const d of defs ?? []) {
-        if (seeded.has(d.id)) continue;
+        if (hasCurrentCycle.has(d.id)) continue;
         let period: { start: string; end: string } | null = null;
         if (d.reset_basis === "calendar") {
           period = computeCalendarPeriod(today, d.reset_frequency);
