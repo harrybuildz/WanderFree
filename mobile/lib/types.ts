@@ -145,6 +145,9 @@ export interface WalletAccount {
   rewards_program?: RewardsProgram;
 }
 
+/** Manual per-card note of whether the user can earn this card's signup bonus. */
+export type BonusEligibility = "eligible" | "not_eligible" | "eligible_on";
+
 export interface UserCard {
   id: string;
   portfolio_id: string;
@@ -153,6 +156,10 @@ export interface UserCard {
   last_four: string | null;
   opened_on: string | null;
   is_active: boolean;
+  /** The card_product this was product-changed from (null = original). */
+  product_changed_from_id: string | null;
+  bonus_eligibility: BonusEligibility;
+  bonus_eligible_on: string | null;
   created_at: string;
   updated_at: string;
   card_product?: CardProduct;

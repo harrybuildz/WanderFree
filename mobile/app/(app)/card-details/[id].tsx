@@ -4,7 +4,16 @@
 // card on the Cards tab or a row on Home.
 
 import { router, useLocalSearchParams } from "expo-router";
-import { ArrowLeft, Pencil, Plus, Trash2 } from "lucide-react-native";
+import {
+  ArrowLeft,
+  ArrowUpDown,
+  ChevronRight,
+  Circle,
+  CircleCheck,
+  Pencil,
+  Plus,
+  Trash2,
+} from "lucide-react-native";
 import { useState } from "react";
 import {
   ActivityIndicator,
@@ -40,6 +49,8 @@ import {
   useAddSignupBonus,
   useAddSpendEntry,
   useCardDetails,
+  useCardProducts,
+  useChangeCardProduct,
   useCurrentPortfolio,
   useProgramWallets,
   useRemoveSpendEntry,
@@ -50,7 +61,7 @@ import {
 } from "@/lib/hooks";
 import { snackbar, snackbarAfterModalClose } from "@/lib/snackbar";
 import { colors, fonts } from "@/lib/theme";
-import type { ProgramUnitType } from "@/lib/types";
+import type { BonusEligibility, ProgramUnitType } from "@/lib/types";
 
 // opened_on is a Postgres `date` ("YYYY-MM-DD"), which parses as UTC midnight —
 // so formatting must go through fmtDate (pins timeZone: "UTC") or the calendar
@@ -84,6 +95,12 @@ function formatPeriod(start: string, end: string): string {
   return `${fmt(start)} – ${fmt(end)}`;
 }
 
+const ELIGIBILITY_OPTIONS: { value: BonusEligibility; label: string }[] = [
+  { value: "eligible", label: "Eligible" },
+  { value: "not_eligible", label: "Not eligible" },
+  { value: "eligible_on", label: "Eligible on" },
+];
+
 export default function CardDetailsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   // Android 15 draws edge-to-edge; pad scroll content past the gesture bar.
@@ -100,7 +117,10 @@ export default function CardDetailsScreen() {
   const removeSpend = useRemoveSpendEntry();
   const { data: programWallets } = useProgramWallets(portfolioId);
   const setBalance = useSetWalletBalance(portfolioId);
+  const changeProduct = useChangeCardProduct(portfolioId);
+  const { data: catalog } = useCardProducts();
   const [walletEditOpen, setWalletEditOpen] = useState(false);
+  const [productModal, setProductModal] = useState(false);
 
   const [editing, setEditing] = useState(false);
   const [nickname, setNickname] = useState("");
@@ -215,11 +235,15 @@ export default function CardDetailsScreen() {
     nickname: string | null;
     last_four: string | null;
     opened_on: string | null;
+    product_changed_from_id: string | null;
+    bonus_eligibility: BonusEligibility;
+    bonus_eligible_on: string | null;
     card_product: {
+      id: string;
       name: string;
       network: string | null;
       annual_fee: number;
-      issuer: { name: string } | null;
+      issuer: { id: string; name: string } | null;
       rewards_program: {
         id: string;
         name: string;
@@ -288,6 +312,46 @@ export default function CardDetailsScreen() {
     product?.annual_fee != null
       ? `$${Number(product.annual_fee).toFixed(0)}/yr`
       : null;
+
+  // Product change (upgrade/downgrade): other products from the same issuer.
+  const issuerId = product?.issuer?.id ?? null;
+  const siblingProducts = (catalog ?? []).filter(
+    (p) => p.issuer_id === issuerId && p.id !== product?.id,
+  );
+  const changedFromName = c.product_changed_from_id
+    ? ((catalog ?? []).find((p) => p.id === c.product_changed_from_id)?.name ??
+      null)
+    : null;
+
+  function doChangeProduct(newProductId: string, newProductName: string) {
+    if (!product?.id) return;
+    changeProduct.mutate(
+      {
+        userCardId: c.id,
+        newCardProductId: newProductId,
+      },
+      {
+        onSuccess: () => {
+          setProductModal(false);
+          snackbarAfterModalClose(() =>
+            snackbar.success(`Changed to ${newProductName}`),
+          );
+        },
+        onError: (e) => snackbar.error((e as Error).message),
+      },
+    );
+  }
+
+  // Signup-bonus eligibility is a manual per-card note; persist immediately.
+  function setEligibility(next: BonusEligibility, eligibleOn: string | null) {
+    update.mutate({
+      userCardId: c.id,
+      patch: {
+        bonus_eligibility: next,
+        bonus_eligible_on: next === "eligible_on" ? eligibleOn : null,
+      },
+    });
+  }
 
   // The card's signup bonus. The schema allows several rows per card, but
   // the product concept is one welcome offer — show the most recent.
@@ -425,6 +489,28 @@ export default function CardDetailsScreen() {
     );
   }
 
+  // One-tap toggle straight from the bonus section (no edit modal). Flips
+  // is_completed on the stored row; the DB trigger credits/reverses the bonus
+  // value in the program wallet using its ledger, so no field values are needed.
+  function toggleBonusDone(completed: boolean) {
+    if (!card || !bonus) return;
+    updateBonus.mutate(
+      {
+        bonusId: bonus.id,
+        userCardId: c.id,
+        patch: { is_completed: completed },
+      },
+      {
+        onSuccess: () =>
+          snackbar.success(
+            completed ? "Bonus marked as earned" : "Bonus reopened",
+          ),
+        onError: (e: Error) =>
+          snackbar.error(e.message || "Couldn't update bonus"),
+      },
+    );
+  }
+
   function startAddSpend() {
     setSpendAmount("");
     setSpendDate(todayIso);
@@ -546,6 +632,45 @@ export default function CardDetailsScreen() {
           />
         </View>
 
+        <View>
+          <Pressable
+            onPress={() => setProductModal(true)}
+            disabled={siblingProducts.length === 0}
+            accessibilityRole="button"
+            accessibilityLabel="Change card product"
+            className={cn(
+              "flex-row items-center justify-center gap-2 py-2.5 rounded-xl border border-border",
+              siblingProducts.length > 0 && "active:bg-surface-muted",
+            )}
+          >
+            <ArrowUpDown
+              size={15}
+              color={
+                siblingProducts.length > 0
+                  ? colors.primaryStrong
+                  : colors.textMuted
+              }
+            />
+            <Text
+              variant="callout"
+              className={
+                siblingProducts.length > 0
+                  ? "text-primary-strong"
+                  : "text-text-muted"
+              }
+            >
+              {siblingProducts.length > 0
+                ? "Change product (upgrade / downgrade)"
+                : "No other products from this issuer"}
+            </Text>
+          </Pressable>
+          {changedFromName && (
+            <Text variant="caption" className="text-text-muted mt-2 text-center">
+              Product-changed from {changedFromName}
+            </Text>
+          )}
+        </View>
+
         {program && (
           <View className="bg-surface rounded-2xl border border-border">
             <View className="flex-row items-center justify-between px-4 py-3 border-b border-border">
@@ -641,6 +766,32 @@ export default function CardDetailsScreen() {
                   ? ` · spend by ${fmtDate(bonus.spend_deadline)}`
                   : ""}
               </Text>
+              <Pressable
+                onPress={() => toggleBonusDone(!bonus.is_completed)}
+                disabled={updateBonus.isPending}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: bonus.is_completed }}
+                accessibilityLabel="Mark signup bonus as earned"
+                className="flex-row items-center justify-center gap-2 mt-3 py-2.5 rounded-xl border border-border active:bg-surface-muted"
+              >
+                {bonus.is_completed ? (
+                  <CircleCheck size={16} color={colors.successText} />
+                ) : (
+                  <Circle size={16} color={colors.textMuted} />
+                )}
+                <Text
+                  variant="callout"
+                  className={
+                    bonus.is_completed
+                      ? "text-success-text"
+                      : "text-primary-strong"
+                  }
+                >
+                  {bonus.is_completed
+                    ? "Earned — tap to undo"
+                    : "Mark as earned"}
+                </Text>
+              </Pressable>
             </View>
           ) : (
             <View className="px-4 py-5 items-center">
@@ -650,6 +801,60 @@ export default function CardDetailsScreen() {
               </Text>
             </View>
           )}
+          {/* Eligibility — a manual note of whether the user can earn this
+              card's welcome offer, independent of whether one is being
+              tracked above (e.g. "not eligible — earned before"). */}
+          <View className="px-4 py-3 border-t border-border">
+            <Text variant="label" className="text-text-subtle uppercase mb-2">
+              Eligibility
+            </Text>
+            <View className="flex-row gap-2">
+              {ELIGIBILITY_OPTIONS.map((opt) => {
+                const active = c.bonus_eligibility === opt.value;
+                return (
+                  <Pressable
+                    key={opt.value}
+                    onPress={() =>
+                      setEligibility(
+                        opt.value,
+                        opt.value === "eligible_on"
+                          ? (c.bonus_eligible_on ?? todayIso)
+                          : null,
+                      )
+                    }
+                    disabled={update.isPending}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: active }}
+                    className={cn(
+                      "flex-1 items-center py-2 rounded-xl border",
+                      active
+                        ? "border-primary bg-primary-subtle"
+                        : "border-border active:bg-surface-muted",
+                    )}
+                  >
+                    <Text
+                      variant="label"
+                      className={
+                        active ? "text-primary-strong" : "text-text-muted"
+                      }
+                    >
+                      {opt.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {c.bonus_eligibility === "eligible_on" && (
+              <DateField
+                value={c.bonus_eligible_on}
+                onChange={(d) => setEligibility("eligible_on", d)}
+                placeholder="Select a date"
+                minimumDate={new Date()}
+                className="mt-3"
+                accessibilityLabel="Eligible again on date"
+              />
+            )}
+          </View>
         </View>
 
         <View className="bg-surface rounded-2xl border border-border">
@@ -752,9 +957,20 @@ export default function CardDetailsScreen() {
                   : "—";
             const last = idx === arr.length - 1;
             return (
-              <View
+              <Pressable
                 key={bd.id}
-                className={cn("px-4 py-3", !last && "border-b border-border")}
+                onPress={() =>
+                  router.push({
+                    pathname: "/benefit-detail/[key]" as never,
+                    params: { key: `${c.id}__${bd.id}` },
+                  })
+                }
+                accessibilityRole="button"
+                accessibilityLabel={`View ${bd.name}`}
+                className={cn(
+                  "px-4 py-3 active:bg-surface-muted",
+                  !last && "border-b border-border",
+                )}
               >
                 <View className="flex-row items-center justify-between">
                   <Text variant="title" className="flex-1 pr-3">
@@ -763,6 +979,11 @@ export default function CardDetailsScreen() {
                   <Text variant="callout" className="text-text-muted">
                     {value}
                   </Text>
+                  <ChevronRight
+                    size={16}
+                    color={colors.textMuted}
+                    style={{ marginLeft: 6 }}
+                  />
                 </View>
                 <Text variant="caption" className="text-text-muted mt-1">
                   {bd.reset_frequency} · {bd.reset_basis}
@@ -784,7 +1005,7 @@ export default function CardDetailsScreen() {
                     No active cycle
                   </Text>
                 )}
-              </View>
+              </Pressable>
             );
           })}
           {(product?.benefit_definitions.length ?? 0) === 0 && (
@@ -1106,6 +1327,72 @@ export default function CardDetailsScreen() {
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        visible={productModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setProductModal(false)}
+      >
+        <View className="flex-1 items-center justify-center bg-overlay/40 px-6">
+          <View className="bg-surface rounded-2xl w-full max-w-md max-h-[80%] grow-0 overflow-hidden">
+            <View className="px-5 pt-5 pb-3 border-b border-border">
+              <Text variant="h2">Change product</Text>
+              <Text variant="body" className="text-text-muted mt-1">
+                Keeps your opened date, spend history, and signup bonus — only
+                the benefits change.
+              </Text>
+            </View>
+            <ScrollView
+              contentContainerStyle={{ paddingVertical: 4 }}
+              keyboardShouldPersistTaps="handled"
+            >
+              {siblingProducts.map((p, idx) => {
+                const currentFee = Number(product?.annual_fee ?? 0);
+                const fee = Number(p.annual_fee ?? 0);
+                const dir =
+                  fee > currentFee
+                    ? "Upgrade"
+                    : fee < currentFee
+                      ? "Downgrade"
+                      : "Switch";
+                const last = idx === siblingProducts.length - 1;
+                return (
+                  <Pressable
+                    key={p.id}
+                    onPress={() => doChangeProduct(p.id, p.name)}
+                    disabled={changeProduct.isPending}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Change to ${p.name}`}
+                    className={cn(
+                      "px-5 py-3 active:bg-surface-muted",
+                      !last && "border-b border-border",
+                    )}
+                  >
+                    <View className="flex-row items-center justify-between">
+                      <Text variant="title" className="flex-1 pr-3">
+                        {p.name}
+                      </Text>
+                      <ChevronRight size={16} color={colors.textMuted} />
+                    </View>
+                    <Text variant="caption" className="text-text-muted mt-0.5">
+                      {dir} · ${fee.toFixed(0)}/yr annual fee
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <View className="px-5 py-3 border-t border-border">
+              <Button
+                variant="ghost"
+                label="Cancel"
+                className="bg-surface-muted"
+                onPress={() => setProductModal(false)}
+              />
+            </View>
+          </View>
+        </View>
       </Modal>
 
       {program && walletEditOpen && programBalance != null && (

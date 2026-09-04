@@ -34,6 +34,7 @@ import { markOnboarded } from "./onboarding";
 import { queryClient } from "./queryClient";
 import { supabase } from "./supabase";
 import type {
+  BonusEligibility,
   CardProduct,
   Portfolio,
   ProgramUnitType,
@@ -156,7 +157,7 @@ export function useUserCards(portfolioId: string | undefined) {
       const { data, error } = await supabase
         .from("user_cards")
         .select(
-          "*, card_product:card_products(*, issuer:card_issuers(*), rewards_program:rewards_programs(*))",
+          "*, card_product:card_products!card_product_id(*, issuer:card_issuers(*), rewards_program:rewards_programs(*))",
         )
         .eq("portfolio_id", portfolioId!)
         .eq("is_active", true);
@@ -204,7 +205,7 @@ export function useBenefits(portfolioId: string | undefined) {
           `
           id,
           nickname,
-          card_product:card_products(
+          card_product:card_products!card_product_id(
             id,
             name,
             benefit_definitions(
@@ -340,7 +341,7 @@ export function useSignupBonuses(portfolioId: string | undefined) {
         .select(
           `
           id, nickname,
-          card_product:card_products(
+          card_product:card_products!card_product_id(
             id, name, rewards_program:rewards_programs(unit_type)
           ),
           user_signup_bonuses(
@@ -450,7 +451,7 @@ export function useProgramWallets(portfolioId: string | undefined) {
           .select(
             `
             id, nickname,
-            card_product:card_products(
+            card_product:card_products!card_product_id(
               id, name, rewards_program:rewards_programs(id, name, unit_type)
             ),
             user_signup_bonuses(id, bonus_value, is_completed, created_at)
@@ -839,6 +840,8 @@ export function useUpdateUserCard(portfolioId: string | undefined) {
         nickname: string | null;
         last_four: string | null;
         opened_on: string | null;
+        bonus_eligibility: BonusEligibility;
+        bonus_eligible_on: string | null;
       }>;
     }) => {
       const { error } = await supabase
@@ -861,6 +864,112 @@ export function useUpdateUserCard(portfolioId: string | undefined) {
   });
 }
 
+/** Product-change a card (upgrade/downgrade within the same issuer).
+ *  Keeps the SAME user_cards row — opened_on, spend history, and the signup
+ *  bonus all carry over — and just swaps card_product_id, recording where it
+ *  came from. Active benefit cycles for the NEW product are materialised the
+ *  same way useAddUserCard seeds them; old cycles/redemptions stay as history
+ *  (the card-details benefits list only renders the current product's defs). */
+export function useChangeCardProduct(portfolioId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: {
+      userCardId: string;
+      newCardProductId: string;
+    }) => {
+      const { userCardId, newCardProductId } = args;
+
+      // 1. Read opened_on — anniversary benefit cycles are anchored to it.
+      const { data: card, error: cardErr } = await supabase
+        .from("user_cards")
+        .select("opened_on")
+        .eq("id", userCardId)
+        .single();
+      if (cardErr) throw cardErr;
+
+      // 2. Swap the product on the same row. The same-issuer check and the
+      //    product_changed_from_id provenance (recorded once, the original
+      //    product) are enforced by the trg_enforce_card_product_change trigger
+      //    so they hold even if a client bypasses the sibling-product UI.
+      const { error: upErr } = await supabase
+        .from("user_cards")
+        .update({ card_product_id: newCardProductId })
+        .eq("id", userCardId);
+      if (upErr) throw upErr;
+
+      // 3. Materialise the new product's benefit cycles (mirrors useAddUserCard).
+      const { data: defs, error: dErr } = await supabase
+        .from("benefit_definitions")
+        .select(
+          "id, value_per_period, annual_value, reset_frequency, reset_basis",
+        )
+        .eq("card_product_id", newCardProductId);
+      if (dErr) throw dErr;
+
+      // Skip a def only when it already has a cycle covering TODAY — a switch
+      // back to a previously-held product may have old, expired cycles for its
+      // defs, and those must not suppress seeding a fresh current cycle (else
+      // useBenefits finds no cycle for today).
+      const today = new Date();
+      const todayIso = iso(today);
+      const { data: existing, error: exErr } = await supabase
+        .from("user_benefit_cycles")
+        .select("benefit_definition_id, period_start, period_end")
+        .eq("user_card_id", userCardId);
+      if (exErr) throw exErr;
+      const hasCurrentCycle = new Set(
+        (existing ?? [])
+          .filter(
+            (c) => c.period_start <= todayIso && c.period_end >= todayIso,
+          )
+          .map((c) => c.benefit_definition_id),
+      );
+
+      const openedOnDate = card?.opened_on ? new Date(card.opened_on) : null;
+      const cycles: Array<Record<string, unknown>> = [];
+      for (const d of defs ?? []) {
+        if (hasCurrentCycle.has(d.id)) continue;
+        let period: { start: string; end: string } | null = null;
+        if (d.reset_basis === "calendar") {
+          period = computeCalendarPeriod(today, d.reset_frequency);
+        } else if (d.reset_basis === "anniversary" && openedOnDate) {
+          period = computeAnniversaryPeriod(
+            today,
+            openedOnDate,
+            d.reset_frequency,
+          );
+        }
+        if (!period) continue; // anniversary benefit but no opened_on — skip
+        cycles.push({
+          user_card_id: userCardId,
+          benefit_definition_id: d.id,
+          period_start: period.start,
+          period_end: period.end,
+          allotted_value: d.value_per_period ?? d.annual_value ?? null,
+          status: "unused",
+        });
+      }
+      if (cycles.length > 0) {
+        const { error: cyErr } = await supabase
+          .from("user_benefit_cycles")
+          .insert(cycles);
+        if (cyErr) throw cyErr;
+      }
+    },
+    onSuccess: (_data, vars) => {
+      track("card_product_changed", {}, portfolioId);
+      qc.invalidateQueries({
+        queryKey: ["portfolio", portfolioId, "user_cards"],
+      });
+      qc.invalidateQueries({ queryKey: benefitsQueryKey(portfolioId) });
+      qc.invalidateQueries({
+        queryKey: ["portfolio", portfolioId, "program_wallets_v2"],
+      });
+      qc.invalidateQueries({ queryKey: ["card_v2", vars.userCardId] });
+    },
+  });
+}
+
 /** Full card view — joined card_product (with issuer + rewards_program),
  *  all the card_product's benefit_definitions (with category), every
  *  user_benefit_cycle for this card, and every benefit_redemption. Used by
@@ -875,7 +984,8 @@ export function useCardDetails(userCardId: string | undefined) {
         .select(
           `
           id, nickname, last_four, opened_on, is_active, created_at, portfolio_id,
-          card_product:card_products(
+          product_changed_from_id, bonus_eligibility, bonus_eligible_on,
+          card_product:card_products!card_product_id(
             id, name, network, annual_fee,
             issuer:card_issuers(id, name),
             rewards_program:rewards_programs(id, name, unit_type),
@@ -947,7 +1057,7 @@ export function useEnsureCycles(portfolioId: string | undefined) {
           `
           id,
           opened_on,
-          card_product:card_products(
+          card_product:card_products!card_product_id(
             benefit_definitions(
               id, reset_frequency, reset_basis, value_per_period, annual_value
             )

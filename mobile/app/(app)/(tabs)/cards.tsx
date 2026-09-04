@@ -221,6 +221,11 @@ export default function CardsScreen() {
       {
         onSuccess: () => {
           setAddTarget(null);
+          // Drop back to the "my cards" list rather than leaving the user in
+          // the catalog search results they just added from.
+          setSearch("");
+          setSearchFocused(false);
+          Keyboard.dismiss();
           snackbarAfterModalClose(() => snackbar.success("Card added"));
         },
         // Modal is still open on failure, so show the error inline.
