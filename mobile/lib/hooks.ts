@@ -157,7 +157,7 @@ export function useUserCards(portfolioId: string | undefined) {
       const { data, error } = await supabase
         .from("user_cards")
         .select(
-          "*, card_product:card_products(*, issuer:card_issuers(*), rewards_program:rewards_programs(*))",
+          "*, card_product:card_products!card_product_id(*, issuer:card_issuers(*), rewards_program:rewards_programs(*))",
         )
         .eq("portfolio_id", portfolioId!)
         .eq("is_active", true);
@@ -205,7 +205,7 @@ export function useBenefits(portfolioId: string | undefined) {
           `
           id,
           nickname,
-          card_product:card_products(
+          card_product:card_products!card_product_id(
             id,
             name,
             benefit_definitions(
@@ -341,7 +341,7 @@ export function useSignupBonuses(portfolioId: string | undefined) {
         .select(
           `
           id, nickname,
-          card_product:card_products(
+          card_product:card_products!card_product_id(
             id, name, rewards_program:rewards_programs(unit_type)
           ),
           user_signup_bonuses(
@@ -451,7 +451,7 @@ export function useProgramWallets(portfolioId: string | undefined) {
           .select(
             `
             id, nickname,
-            card_product:card_products(
+            card_product:card_products!card_product_id(
               id, name, rewards_program:rewards_programs(id, name, unit_type)
             ),
             user_signup_bonuses(id, bonus_value, is_completed, created_at)
@@ -979,7 +979,7 @@ export function useCardDetails(userCardId: string | undefined) {
           `
           id, nickname, last_four, opened_on, is_active, created_at, portfolio_id,
           product_changed_from_id, bonus_eligibility, bonus_eligible_on,
-          card_product:card_products(
+          card_product:card_products!card_product_id(
             id, name, network, annual_fee,
             issuer:card_issuers(id, name),
             rewards_program:rewards_programs(id, name, unit_type),
@@ -1051,7 +1051,7 @@ export function useEnsureCycles(portfolioId: string | undefined) {
           `
           id,
           opened_on,
-          card_product:card_products(
+          card_product:card_products!card_product_id(
             benefit_definitions(
               id, reset_frequency, reset_basis, value_per_period, annual_value
             )
